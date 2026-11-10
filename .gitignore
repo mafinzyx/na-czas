@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+backend/*.db
+
+# Node
+node_modules/
+dist/
+
+# Secrets / local config
+.env
+.env.local
+
+# Editors
+.vscode/
+.idea/
