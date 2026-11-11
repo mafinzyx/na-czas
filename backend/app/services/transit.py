@@ -10,6 +10,7 @@ the planner then falls back to a rough estimate.
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -22,7 +23,11 @@ from app.services.geo import LatLon, decode_polyline, thin
 logger = logging.getLogger(__name__)
 
 CACHE_TTL_SECONDS = 10 * 60
-MAX_ITINERARIES = 5
+MAX_ITINERARIES = 5  # different line combinations shown for one journey
+ITINERARIES_PER_QUERY = 8
+SHORT_WALK_SECONDS = 7 * 60  # walking limit to and from stops in the "nearest stop" search
+WALK_PENALTY = 0.5  # a minute of walking counts as 1.5 minutes when ranking connections
+TRANSFER_PENALTY_MIN = 5
 MAX_POINTS_PER_LEG = 120
 
 # Transitous mode -> the leg kind used by this app.
@@ -74,6 +79,21 @@ class TransitItinerary:
     arrive: datetime  # reaching the destination
     transfers: int
     legs: list[TransitLeg]
+
+    @property
+    def lines(self) -> tuple[str, ...]:
+        """The lines taken, in order: what makes two connections "the same route"."""
+        return tuple(leg.line or leg.kind for leg in self.legs if leg.is_ride)
+
+    @property
+    def walk_minutes(self) -> float:
+        return sum(leg.minutes for leg in self.legs if not leg.is_ride)
+
+    @property
+    def inconvenience(self) -> float:
+        """Rough ranking score in minutes: travel time, with walking and changes counted extra."""
+        duration = (self.arrive - self.depart).total_seconds() / 60
+        return duration + WALK_PENALTY * self.walk_minutes + TRANSFER_PENALTY_MIN * self.transfers
 
 
 _cache: dict[tuple, tuple[float, list[TransitItinerary]]] = {}
@@ -146,27 +166,68 @@ def find_itineraries(
         return cached[1]
 
     zone = ZoneInfo(settings.timezone)
-    try:
+    base_params = {
+        "fromPlace": f"{lat1},{lon1}",
+        "toPlace": f"{lat2},{lon2}",
+        "time": moment.replace(tzinfo=zone).isoformat(),
+        "arriveBy": str(arrive_by).lower(),
+        "numItineraries": ITINERARIES_PER_QUERY,
+    }
+
+    def fetch(extra: dict) -> list[TransitItinerary]:
         response = httpx.get(
             settings.transit_api_url,
-            params={
-                "fromPlace": f"{lat1},{lon1}",
-                "toPlace": f"{lat2},{lon2}",
-                "time": moment.replace(tzinfo=zone).isoformat(),
-                "arriveBy": str(arrive_by).lower(),
-                "numItineraries": MAX_ITINERARIES,
-            },
+            params={**base_params, **extra},
             headers={"User-Agent": settings.user_agent},
             timeout=settings.transit_timeout_seconds,
         )
         response.raise_for_status()
-        itineraries = _parse(response.json(), zone)
-    except (httpx.HTTPError, KeyError, ValueError) as error:
-        logger.warning("Transitous unavailable, public transport will be estimated: %s", error)
-        return None
+        return _parse(response.json(), zone)
 
-    # Keep the connections closest to the requested time.
-    itineraries.sort(key=lambda i: i.depart, reverse=arrive_by)
-    itineraries = itineraries[:MAX_ITINERARIES]
+    # The router only returns the fastest connections, and those often mean a long walk
+    # to a direct line. A second search with a short walking limit brings in what a local
+    # would also consider: the nearby stop, even if it costs a change.
+    short_walk = {"maxPreTransitTime": SHORT_WALK_SECONDS, "maxPostTransitTime": SHORT_WALK_SECONDS}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fastest = pool.submit(fetch, {})
+        nearest = pool.submit(fetch, short_walk)
+        try:
+            candidates = fastest.result()
+        except (httpx.HTTPError, KeyError, ValueError) as error:
+            logger.warning("Transitous unavailable, public transport will be estimated: %s", error)
+            return None
+        try:
+            candidates += nearest.result()
+        except (httpx.HTTPError, KeyError, ValueError) as error:
+            logger.warning("Short-walk transit search failed, showing the fastest connections only: %s", error)
+
+    itineraries = select_varied(candidates, arrive_by)
     _cache[key] = (time.monotonic(), itineraries)
     return itineraries
+
+
+def select_varied(candidates: list[TransitItinerary], arrive_by: bool) -> list[TransitItinerary]:
+    """Picks a small, varied set of connections: different line combinations first.
+
+    Showing five departures of the same bus hides the alternatives, so each combination
+    of lines appears once (its departure closest to the requested time). The best
+    combination also keeps one more departure, as a safer or later fallback.
+    """
+    closest_first = sorted(candidates, key=lambda i: i.depart, reverse=arrive_by)
+    by_lines: dict[tuple, list[TransitItinerary]] = {}
+    for itinerary in closest_first:
+        departures = by_lines.setdefault(itinerary.lines, [])
+        if all(itinerary.depart != other.depart for other in departures):
+            departures.append(itinerary)
+
+    ranked = sorted(by_lines.values(), key=lambda departures: departures[0].inconvenience)
+    chosen = [departures[0] for departures in ranked[:MAX_ITINERARIES]]
+
+    # Always include the connection with the least walking, even if it ranks low.
+    least_walking = min(ranked, key=lambda departures: departures[0].walk_minutes, default=None)
+    if least_walking and least_walking[0] not in chosen:
+        chosen[-1] = least_walking[0]
+
+    if ranked and len(ranked[0]) > 1:
+        chosen.append(ranked[0][1])
+    return chosen

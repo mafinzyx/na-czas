@@ -38,7 +38,8 @@ spóźnienie.
 
 - **Szybkie wyszukiwanie** (ekran główny): skąd, dokąd, „być na miejscu o” albo „wyjazd o”,
   przycisk „Jadę teraz”. Wyniki pojawiają się od razu po wybraniu obu punktów.
-- **Komunikacja miejska z prawdziwego rozkładu**: do pięciu połączeń, numery linii, gdzie
+- **Komunikacja miejska z prawdziwego rozkładu**: do pięciu różnych połączeń (także
+  z przesiadką i z bliższego przystanku), numery linii, gdzie
   wsiąść, gdzie się przesiąść, gdzie wysiąść, ile przystanków i ile dojścia pieszo.
 - **Mapa**: trasa wybranej opcji, przystanki wsiadania, przesiadki i wysiadania, a dla roweru
   także alternatywne trasy.
@@ -64,7 +65,7 @@ aplikacja działa wszędzie tam, gdzie dostępne są otwarte rozkłady jazdy.
 | Back-end | Python 3.11+, FastAPI, SQLAlchemy 2, Pydantic 2, SQLite |
 | Front-end | React 19, TypeScript, Vite, TanStack Query, React Router, Leaflet |
 | AI (opcjonalnie) | Claude przez oficjalne SDK `anthropic` |
-| Testy | pytest (31 testów: logika planowania i API) |
+| Testy | pytest (37 testów: logika planowania, wybór połączeń i API) |
 
 Wszystkie dane zewnętrzne pochodzą z darmowych usług, które **nie wymagają klucza**:
 
