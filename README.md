@@ -8,6 +8,9 @@ porównanie: samochód, taxi, komunikacja miejska z prawdziwego rozkładu, rower
 i spacer. Każdą opcję można zobaczyć na mapie. Trasy, którymi jeździsz regularnie, zapisujesz
 jednym kliknięciem i dostajesz plan na cały tydzień.
 
+**Wersja online: https://na-czas.onrender.com** (darmowy hosting: po dłuższej przerwie
+pierwsze otwarcie trwa około minuty, a dane wracają do przykładowych po restarcie)
+
 ![Demo aplikacji](docs/demo.gif)
 
 ## Creative twist: plan B i „punkt bez powrotu”
